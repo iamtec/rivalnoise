@@ -43,6 +43,84 @@
             text-align: center;
             font-size: 14px;
         }
+        
+        .controls {
+            margin-top: 30px;
+            padding: 20px;
+            background: #1a1a1a;
+            border-radius: 4px;
+        }
+        
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .control-group:last-of-type {
+            margin-bottom: 0;
+        }
+        
+        .control-label {
+            color: #888;
+            font-size: 12px;
+            min-width: 80px;
+        }
+        
+        .slider {
+            flex: 1;
+            height: 6px;
+            -webkit-appearance: none;
+            appearance: none;
+            outline: none;
+            border-radius: 3px;
+        }
+        
+        .slider.wave-slider {
+            background: linear-gradient(to right, #ff0066 0%, #00ff00 50%, #0099ff 100%);
+        }
+        
+        .slider.speed-slider {
+            background: linear-gradient(to right, #444 0%, #0099ff 100%);
+        }
+        
+        .slider.attenuation-slider {
+            background: linear-gradient(to right, #666 0%, #ff9900 100%);
+        }
+        
+        .slider.offset-slider {
+            background: linear-gradient(to right, #0099ff 0%, #666 50%, #ff0066 100%);
+        }
+        
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            background: #fff;
+            cursor: pointer;
+            border-radius: 50%;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+        }
+        
+        .slider::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            background: #fff;
+            cursor: pointer;
+            border-radius: 50%;
+            border: none;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+        }
+        
+        .wave-labels {
+            display: flex;
+            justify-content: space-between;
+            color: #666;
+            font-size: 10px;
+            margin-top: 5px;
+        }
     </style>
 </head>
 <body>
@@ -51,6 +129,42 @@
         <div class="value-display">
             <div>Full Range: <span id="fullRange">0-127</span></div>
             <div>Attenuated/Offset: <span id="attenuatedRange">105-127</span></div>
+        </div>
+        <div class="controls">
+            <div class="control-group">
+                <label class="control-label">Wave Type</label>
+                <input type="range" min="0" max="100" value="100" class="slider wave-slider" id="waveTypeSlider">
+            </div>
+            <div class="wave-labels">
+                <span>SINE</span>
+                <span>SQUARE</span>
+                <span>NOISE</span>
+            </div>
+            <div class="control-group">
+                <label class="control-label">Speed</label>
+                <input type="range" min="1" max="100" value="20" class="slider speed-slider" id="speedSlider">
+            </div>
+            <div class="wave-labels">
+                <span>SLOW</span>
+                <span>FAST</span>
+            </div>
+            <div class="control-group">
+                <label class="control-label">Attenuation</label>
+                <input type="range" min="1" max="127" value="22" class="slider attenuation-slider" id="attenuationSlider">
+            </div>
+            <div class="wave-labels">
+                <span>NARROW</span>
+                <span>FULL RANGE</span>
+            </div>
+            <div class="control-group">
+                <label class="control-label">Offset</label>
+                <input type="range" min="0" max="127" value="105" class="slider offset-slider" id="offsetSlider">
+            </div>
+            <div class="wave-labels">
+                <span>LOW</span>
+                <span>CENTER</span>
+                <span>HIGH</span>
+            </div>
         </div>
         <div class="info">
             Hardware LFO Module - Noise Source Visualization
@@ -70,44 +184,123 @@
         // Noise parameters
         const MIDI_MIN = 0;
         const MIDI_MAX = 127;
-        const ATTENUATION_MIN = 105;
-        const ATTENUATION_MAX = 127;
+        let attenuationRange = 22; // How wide the output range is (1-127)
+        let offsetValue = 105; // Where the range starts (0-127)
         
         // Store noise values for scrolling effect
         let noiseHistory = [];
         const MAX_HISTORY = OUTER_WIDTH;
         
-        // Perlin-like noise generator (smoother than pure random)
+        // Wave type control
+        let waveTypeMorph = 1.0; // 0 = sine, 0.5 = square, 1.0 = noise
+        let speedMultiplier = 0.04; // Controls the speed of all waveforms (lower default = slower)
+        
+        // Noise generator that transitions from Wogglebug-style at slow speeds to pure random at fast speeds
         class NoiseGenerator {
             constructor() {
-                this.value = Math.random() * (MIDI_MAX - MIDI_MIN) + MIDI_MIN;
+                this.targetValue = Math.random() * (MIDI_MAX - MIDI_MIN) + MIDI_MIN;
+                this.currentValue = this.targetValue;
+                this.phase = 0; // For matching sine/square frequency
+                this.lastPhaseWrap = 0;
                 this.velocity = 0;
-                this.smoothing = 0.85; // Higher = smoother
+                this.smoothing = 0.85;
             }
             
             next() {
-                // Add some acceleration
-                this.velocity += (Math.random() - 0.5) * 8;
-                this.velocity *= this.smoothing;
+                // Calculate frequency to match sine/square waves
+                const frequency = 0.001 + (speedMultiplier * 0.499);
                 
-                // Update value
-                this.value += this.velocity;
-                
-                // Clamp to MIDI range
-                if (this.value < MIDI_MIN) {
-                    this.value = MIDI_MIN;
-                    this.velocity *= -0.5;
+                // At speeds above 0.6, transition to pure random noise behavior
+                if (speedMultiplier > 0.6) {
+                    // Pure random noise with smoothing (like original)
+                    const speedFactor = (speedMultiplier - 0.6) / 0.4; // 0 to 1 as we go from 0.6 to 1.0
+                    this.velocity += (Math.random() - 0.5) * 8 * (1 + speedFactor * 10); // Gets much faster
+                    this.velocity *= this.smoothing;
+                    this.currentValue += this.velocity;
+                    
+                    // Clamp to MIDI range
+                    if (this.currentValue < MIDI_MIN) {
+                        this.currentValue = MIDI_MIN;
+                        this.velocity *= -0.5;
+                    }
+                    if (this.currentValue > MIDI_MAX) {
+                        this.currentValue = MIDI_MAX;
+                        this.velocity *= -0.5;
+                    }
+                } else {
+                    // Wogglebug-style: pick new random values at the same frequency as sine/square
+                    this.phase += frequency;
+                    
+                    // Detect when phase wraps through 2π (one cycle complete)
+                    const currentCycle = Math.floor(this.phase / (Math.PI * 2));
+                    if (currentCycle > this.lastPhaseWrap) {
+                        // Pick a new target value at each cycle
+                        this.targetValue = Math.random() * (MIDI_MAX - MIDI_MIN) + MIDI_MIN;
+                        this.lastPhaseWrap = currentCycle;
+                    }
+                    
+                    // Slew towards the target value
+                    // Slew rate scales with speed so it can reach the target in time
+                    const slewRate = 0.01 + (speedMultiplier * 0.3);
+                    const diff = this.targetValue - this.currentValue;
+                    this.currentValue += diff * slewRate;
                 }
-                if (this.value > MIDI_MAX) {
-                    this.value = MIDI_MAX;
-                    this.velocity *= -0.5;
-                }
                 
-                return this.value;
+                return this.currentValue;
             }
         }
         
         const noiseGen = new NoiseGenerator();
+        
+        // Sine wave generator
+        let sinePhase = 0;
+        
+        function getSineWave() {
+            // Speed range: 0.001 (30 sec period) to 0.5 (much faster, more visible modulation)
+            const frequency = 0.001 + (speedMultiplier * 0.499);
+            sinePhase += frequency;
+            const value = Math.sin(sinePhase) * 0.5 + 0.5; // Normalize to 0-1
+            return value * (MIDI_MAX - MIDI_MIN) + MIDI_MIN;
+        }
+        
+        // Square wave generator with rounded corners
+        let squarePhase = 0;
+        const cornerSmoothing = 0.15; // How much to round the corners
+        
+        function getSquareWave() {
+            // Same frequency range as sine
+            const frequency = 0.001 + (speedMultiplier * 0.499);
+            squarePhase += frequency;
+            const rawSquare = Math.sin(squarePhase) > 0 ? 1 : 0;
+            
+            // Add some variation and smooth the corners
+            const sinValue = Math.sin(squarePhase);
+            const smoothing = Math.pow(Math.abs(sinValue), cornerSmoothing);
+            const smoothedSquare = rawSquare + (sinValue > 0 ? -smoothing : smoothing) * 0.1;
+            
+            // Add slight variation
+            const variation = (Math.random() - 0.5) * 0.05;
+            const value = Math.max(0, Math.min(1, smoothedSquare + variation));
+            
+            return value * (MIDI_MAX - MIDI_MIN) + MIDI_MIN;
+        }
+        
+        // Morphing wave generator
+        function getWaveValue() {
+            const noiseValue = noiseGen.next();
+            const sineValue = getSineWave();
+            const squareValue = getSquareWave();
+            
+            if (waveTypeMorph <= 0.5) {
+                // Morph between sine (0) and square (0.5)
+                const blend = waveTypeMorph * 2; // 0 to 1
+                return sineValue * (1 - blend) + squareValue * blend;
+            } else {
+                // Morph between square (0.5) and noise (1.0)
+                const blend = (waveTypeMorph - 0.5) * 2; // 0 to 1
+                return squareValue * (1 - blend) + noiseValue * blend;
+            }
+        }
         
         // Map MIDI value to Y position
         function midiToY(midiValue, min = MIDI_MIN, max = MIDI_MAX) {
@@ -126,9 +319,9 @@
             ctx.fillStyle = '#000';
             ctx.fillRect(0, 0, OUTER_WIDTH, HEIGHT);
             
-            // Generate new noise value
-            const currentNoise = noiseGen.next();
-            noiseHistory.push(currentNoise);
+            // Generate new wave value based on morph setting
+            const currentValue = getWaveValue();
+            noiseHistory.push(currentValue);
             if (noiseHistory.length > MAX_HISTORY) {
                 noiseHistory.shift();
             }
@@ -138,9 +331,14 @@
             ctx.lineWidth = 2;
             ctx.strokeRect(INNER_X, 10, INNER_WIDTH, HEIGHT - 20);
             
+            // Calculate the actual output range with attenuation and offset
+            // Make sure we never exceed 0-127
+            const outputMin = offsetValue;
+            const outputMax = Math.min(127, offsetValue + attenuationRange);
+            
             // Draw reference lines for attenuation range
-            const attenuatedMinY = midiToY(ATTENUATION_MIN);
-            const attenuatedMaxY = midiToY(ATTENUATION_MAX);
+            const attenuatedMinY = midiToY(outputMin);
+            const attenuatedMaxY = midiToY(outputMax);
             
             ctx.strokeStyle = '#333';
             ctx.lineWidth = 1;
@@ -178,9 +376,9 @@
                 // Full range value
                 const fullRangeY = midiToY(noiseHistory[i]);
                 
-                // Attenuated range value
+                // Attenuated range value with offset
                 const normalized = (noiseHistory[i] - MIDI_MIN) / (MIDI_MAX - MIDI_MIN);
-                const mappedValue = ATTENUATION_MIN + (normalized * (ATTENUATION_MAX - ATTENUATION_MIN));
+                const mappedValue = outputMin + (normalized * (outputMax - outputMin));
                 const attenuatedY = midiToY(mappedValue);
                 
                 if (x < leftTransitionStart) {
@@ -215,21 +413,58 @@
             ctx.font = '10px Courier New';
             ctx.fillText('0', 5, HEIGHT - 5);
             ctx.fillText('127', 5, 20);
-            ctx.fillText(`${ATTENUATION_MIN}`, INNER_X - 25, attenuatedMinY + 4);
-            ctx.fillText(`${ATTENUATION_MAX}`, INNER_X - 25, attenuatedMaxY + 4);
+            ctx.fillText(`${outputMin}`, INNER_X - 25, attenuatedMinY + 4);
+            ctx.fillText(`${outputMax}`, INNER_X - 25, attenuatedMaxY + 4);
             
             // Update display values
-            // Map the current noise value to the attenuated range (same as blue line inside box)
-            const normalized = (currentNoise - MIDI_MIN) / (MIDI_MAX - MIDI_MIN);
-            const mappedValue = ATTENUATION_MIN + (normalized * (ATTENUATION_MAX - ATTENUATION_MIN));
+            // Map the current value to the attenuated range (same as blue line inside box)
+            const normalizedDisplay = (currentValue - MIDI_MIN) / (MIDI_MAX - MIDI_MIN);
+            const mappedValue = outputMin + (normalizedDisplay * (outputMax - outputMin));
             
             document.getElementById('fullRange').textContent = 
-                `${Math.round(currentNoise)} (0-127)`;
+                `${Math.round(currentValue)} (0-127)`;
             document.getElementById('attenuatedRange').textContent = 
-                `${Math.round(mappedValue)} (${ATTENUATION_MIN}-${ATTENUATION_MAX})`;
+                `${Math.round(mappedValue)} (${outputMin}-${outputMax})`;
             
             requestAnimationFrame(draw);
         }
+        
+        // Wave type slider control
+        const waveSlider = document.getElementById('waveTypeSlider');
+        waveSlider.addEventListener('input', (e) => {
+            waveTypeMorph = e.target.value / 100; // Convert 0-100 to 0-1
+        });
+        
+        // Speed slider control
+        const speedSlider = document.getElementById('speedSlider');
+        speedSlider.addEventListener('input', (e) => {
+            // Map 1-100 to speed values
+            // Lower values = slower (30 second periods), higher = faster (near audio rate)
+            const sliderValue = parseInt(e.target.value);
+            speedMultiplier = Math.pow(sliderValue / 100, 2.5); // Steeper curve for better control at slow speeds
+        });
+        
+        // Attenuation slider control
+        const attenuationSlider = document.getElementById('attenuationSlider');
+        attenuationSlider.addEventListener('input', (e) => {
+            attenuationRange = parseInt(e.target.value);
+            // Make sure offset + attenuation doesn't exceed 127
+            if (offsetValue + attenuationRange > 127) {
+                offsetValue = 127 - attenuationRange;
+                document.getElementById('offsetSlider').value = offsetValue;
+            }
+        });
+        
+        // Offset slider control
+        const offsetSlider = document.getElementById('offsetSlider');
+        offsetSlider.addEventListener('input', (e) => {
+            offsetValue = parseInt(e.target.value);
+            // Make sure offset + attenuation doesn't exceed 127
+            if (offsetValue + attenuationRange > 127) {
+                attenuationRange = 127 - offsetValue;
+                document.getElementById('attenuationSlider').value = attenuationRange;
+            }
+        });
         
         // Start animation
         draw();
